@@ -55,7 +55,7 @@ EAFLib::~EAFLib()
 
 void EAFLib::extract(char* input, float* value)
 {
-  char section[128];
+  char section[64];
 
   /* find beginning of exponent */
   int expStart = strcspn(input,"+-");
