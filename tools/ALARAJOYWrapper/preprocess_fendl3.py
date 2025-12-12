@@ -53,11 +53,68 @@ def remove_gas_daughters(all_rxns):
 
     for parent in all_rxns:
         for daughter in all_rxns[parent]:
-            MTs = set(all_rxns[parent][daughter])
+            MTs = set(all_rxns[parent][daughter].keys())
             for MT in MTs:
                 gas_MTs = tp.GAS_DF['total_mt'].tolist()
                 if MT not in gas_MTs and any(MT in gas_MTs for MT in MTs):
                     del all_rxns[parent][daughter][MT]
+
+    return all_rxns
+
+def subtract_gas_from_totals(all_rxns):
+    """
+    For any reaction that produces a gas daughter, subtract the individual
+        cross-sections from the list of total gas production cross sections
+        corresponding to MT = 203-207. Optional method to be called within
+        gas_handling().
+    
+    Arguments:
+        all_rxns (collections.defaultdict): Hierarchical dictionary keyed by
+            parent nuclides to store all reaction data, with structured as:
+            {parent:
+                {daughter:
+                    {MT:
+                        {
+                            'emitted': (str of emitted particles)
+                            'non_zero_groups': (int of non-zero groupwise XS)
+                            'xsections': (array of groupwise XS)
+                        }
+                    }
+                }    
+            }
+    
+    Returns:
+        all_rxns (collections.defaultdict): Modified version of all_rxns with
+            double-counted gas production totals left out.
+    """
+
+    gas_lookup = {row['gas']: row['kza'] for _, row in rxd.GAS_DF.iterrows()}
+    gas_xs_pairs = {
+        (parent, gas_kza): np.zeros(tp.VITAMIN_J_ENERGY_GROUPS)
+        for parent in all_rxns
+        for gas_kza in gas_lookup.values()
+    }
+
+    for parent, daughters in all_rxns.items():
+        for daughter, mt_dict in daughters.items():
+            for rxn in mt_dict.values():
+                if rxn['emitted'] != 'x':
+                    for gas, gkza in gas_lookup.items():
+                        if gas in rxn['emitted']:
+                            gas_xs_pairs[(parent, gkza)] += rxn['xsections']
+
+    for (parent, gkza), accumulated_xs in gas_xs_pairs.items():
+        gmt = rxd.GAS_DF.loc[rxd.GAS_DF['kza'] == gkza, 'total_mt'].iat[0]
+        if gkza in all_rxns[parent] and gmt in all_rxns[parent][gkza]:
+            all_rxns[parent][gkza][gmt]['xsections'] -= accumulated_xs
+
+    for parent in all_rxns:
+        for daughter in list(parent[daughter]):
+            for MT in [
+                MT for MT, rxn in parent[daughter].items()
+                if rxn['emitted'] == 'x'
+            ]:
+                del mt_dict[MT]
 
     return all_rxns
 
@@ -83,32 +140,14 @@ def gas_handling(gas_method, all_rxns):
     if gas_method == 'r':
         return remove_gas_daughters(all_rxns)
 
-    # Pathway for subtraction method to be developed in a separate PR
-    # to close #186
-    # if gas_method == 's':
-        # return subtract_gas_from_totals(rxn)
-
-def truncate_xsec(xsec):
-    """
-    Truncate a cross-section array after its last non-zero value. Cross-
-        section arrays shorter than 175 entries (corresponding to the number
-        of energy groups in the Vitamin-J group structure) are implicitly
-        interpreted as 0 by ALARA when reading ALARAJOY-formatted DSV files,
-        preventing this exclusion from resulting in any lost data, while
-        minimizing the size of the DSV file to be written out.
-
-    Arguments:
-        xsec (numpy.ndarray): 1-D NumPy array with 175 elements with cross-
-            sections for each energy group in the Vitamin-J group structure.
-
-    Returns:
-        truncated (numpy.ndarray): Truncated 1-D NumPy array truncated after
-            the last non-zero element (if it is not the final element in the
-            array).
-    """
-
-    last_nonzero_idx = np.max(np.nonzero(xsec)[0])
-    return xsec[:last_nonzero_idx + 1]
+    elif gas_method == 's':
+        return subtract_gas_from_totals(all_rxns)
+    
+    else:
+        raise KeyError(
+            'Invalid gas method key.' \
+            'Must choose either "r" (remove) or "s" (subtract)'
+        )
     
 def write_dsv(dsv_path, all_rxns):
     """
