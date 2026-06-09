@@ -22,6 +22,7 @@ This preprocessor uses [NJOY 2016](https://github.com/njoy/NJOY2016) Nuclear Dat
 - Domain-specific packages
   * [ENDFtk](https://github.com/njoy/ENDFtk)
   * [NJOY 2016](https://github.com/njoy/NJOY2016) (at Git hash `1dbce787`)
+  * [OpenMC](https://docs.openmc.org/en/stable/quickinstall.html) (only needed if specifying a multigroup energy structure by name from the dictionary `openmc.mgxs.GROUP_STRUCTURES`)
 
 
 
@@ -52,7 +53,7 @@ ALARAJOYWrapper is designed to produce a space-delimited DSV containing cross-da
 
 Running ALARAJOYWrapper can be done with one Python command:
 ```
-python preprocess_fendl3.py -f /path/to/fendl3_data_dir/ -d /path/to/eaf_decay_library/ decay_library_type -a -t -r
+python preprocess_fendl3.py -f /path/to/fendl3_data_dir/ -d /path/to/eaf_decay_library/ decay_library_type -a -t -r -g
 ```
 To read in detail about each of these arguments, call this command:
 ```

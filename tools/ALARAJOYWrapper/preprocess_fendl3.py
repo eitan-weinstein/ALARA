@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from collections import defaultdict
 
-def args():
+def make_argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--decay_lib', '-d', required=True, nargs=2,
@@ -51,7 +51,16 @@ def args():
                 arise to a log file.
         ''')
     )
-    return parser.parse_args()
+    parser.add_argument(
+        '--group_structure', '-g', required=False, nargs=1,
+        help=('''
+            Specification for group structure in which to convert TENDL cross-
+                sections. See tendl_processing.set_group_structure() for
+                specific details for acceptable forms in which to supply this
+                argument.
+        ''')
+    )
+    return parser
 
 def configure_logging(redirect_warnings=False):
     """
@@ -146,7 +155,8 @@ def process_pendf(
 
 def process_gendf(
     njoy_groupr_input, material_id, MTs, mt_dict,
-    temperature, pKZA, isomer_dict, all_rxns, all_nucs
+    temperature, pKZA, isomer_dict, all_rxns, all_nucs,
+    ign=17, ngn='', egn=''
 ):
     """
     Prepare and run NJOY run with GROUPR and iteratively extract cross-section
@@ -183,6 +193,17 @@ def process_gendf(
             }
         all_nucs (dict): Dictionary keyed by all nuclide KZAs in the decay
             library, with values of their half-lives (-1 for stable nuclides).
+        ign (str or int, optional): GROUPR neutron group structure parameter.
+            ign = 1 for arbitrary group structures not contained in NJOY's
+            built-in list of options. Default value corresponds to ign key for
+            the Vitamin-J 175 energy group structure.
+            (Defaults to 17)
+        ngn (str, optional): Number of groups. Will be an empty string unless
+            ign == 1.
+            (Defaults to '')
+        egn (str): Space-joined string of all energy group bounds in ascending
+            order. Will be an empty string unless ign == 1.
+            (Defaults to '')
 
     Returns:
         all_rxns (collections.defaultdict): Updated dictionary for all
@@ -192,7 +213,8 @@ def process_gendf(
     element, A = tp.interpret_KZA(pKZA)
     groupr_input = njt.fill_input_template(
         njoy_groupr_input, material_id, MTs, element,
-        A, mt_dict, temperature, pKZA, isomer_dict
+        A, mt_dict, temperature, pKZA, isomer_dict,
+        ign=ign, ngn=ngn, egn=egn
     )
     njt.write_njoy_input_file(groupr_input)
     gendf_path, njoy_error = njt.run_njoy(
@@ -202,7 +224,7 @@ def process_gendf(
     if gendf_path:
         # Extract MT values again from GENDF file as there may be some
         # difference from the original MT values in the ENDF/PENDF files
-        xs_line_dict, gendf_MTs = tp.extract_gendf_data(gendf_path)
+        xs_line_dict, gendf_MTs, nGroups = tp.extract_gendf_data(gendf_path)
         if MTs != gendf_MTs:
             diffs = sorted(MTs - gendf_MTs)
             warnings.warn(
@@ -212,7 +234,7 @@ def process_gendf(
         if gendf_MTs:
             all_rxns = tp.iterate_MTs(
                 gendf_MTs, mt_dict, xs_line_dict, pKZA, 
-                all_rxns, all_nucs, isomer_dict
+                all_rxns, all_nucs, isomer_dict, nGroups
             )
             print(f'Finished processing {element}-{A}')
 
@@ -230,7 +252,7 @@ def process_gendf(
             NJOY error message: {njoy_error}'''
         )
 
-    return all_rxns
+    return all_rxns, nGroups
 
 def subtract_gas_from_totals(all_rxns):
     """
@@ -273,7 +295,7 @@ def subtract_gas_from_totals(all_rxns):
 
     return all_rxns
 
-def combine_daughter_pathways(gas_filtered):
+def combine_daughter_pathways(gas_filtered, nGroups):
     """
     Calculate cumulative cross-sections from all reaction pathways that
         produce like daughters.
@@ -292,8 +314,8 @@ def combine_daughter_pathways(gas_filtered):
     for parent in gas_filtered:
         for daughter, rxn_list in gas_filtered[parent].items():
             collapsed = {
-                'emitted'    :                                 set(),
-                'xsections'  :  np.zeros(tp.VITAMIN_J_ENERGY_GROUPS)
+                'emitted'    :  set(),
+                'xsections'  :  np.zeros(nGroups)
             }
 
             for rxn in rxn_list.values():
@@ -324,7 +346,7 @@ def rxn_to_str(parent, daughter, rxn):
 
     return dsv_row
 
-def write_dsv(dsv_path, all_rxns):
+def write_dsv(dsv_path, all_rxns, nGroups):
     """
     Write out a space-delimited DSV file from the list of dictionaries,
         dsv_path, produced by iterating through each reaction of each isotope
@@ -354,7 +376,7 @@ def write_dsv(dsv_path, all_rxns):
     """
 
     with open(dsv_path, 'w') as dsv:
-        dsv.write(str(tp.VITAMIN_J_ENERGY_GROUPS) + '\n')
+        dsv.write(str(nGroups) + '\n')
         for parent in sorted(all_rxns):
             for daughter in all_rxns[parent]:
                 if parent != daughter:
@@ -369,19 +391,23 @@ def main():
     Main method when run as a command line script.
     """
 
+    argparser = make_argparser()
+    args = argparser.parse_args()
+
     warnings.formatwarning = (
         lambda msg, cat, fname, lineno, file=None, line=None:
             f"{Path(fname).name}:{lineno}: {cat.__name__}: {msg}\n"
     )
-    configure_logging(args().redirect_warnings)
+    configure_logging(args.redirect_warnings)
 
     TAPE20 = Path('tape20')
 
     dir = njt.set_directory()
     search_dir = (
-        Path(args().fendlFileDir[0]) if args().fendlFileDir else dir
-        )
-    temperature = args().temperature[0]
+        Path(args.fendlFileDir[0]) if args.fendlFileDir else dir
+    )
+    temperature = args.temperature[0]
+    ign, ngn, egn = njt.set_group_structure(args.group_structure)
 
     mt_dict = rxd.process_mt_data(rxd.load_mt_table(dir / 'mt_table.csv'))
     decay_path, decay_lib_type = args().decay_lib
@@ -422,9 +448,10 @@ def main():
         )
 
         if not njoy_prep_error:
-            all_rxns = process_gendf(
+            all_rxns, nGroups = process_gendf(
                 njt.groupr_input, material_id, MTs, mt_dict,
-                temperature, pKZA, isomer_dict, all_rxns, all_nucs
+                temperature, pKZA, isomer_dict, all_rxns, all_nucs,
+                ign=ign, ngn=ngn, egn=egn
             )
 
         else:
@@ -438,11 +465,11 @@ def main():
     # Handle gas total production cross-sections, per user specifications
     gas_filtered = subtract_gas_from_totals(all_rxns)
 
-    if args().amalgamate:
-        gas_filtered = combine_daughter_pathways(gas_filtered)
+    if args.amalgamate:
+        gas_filtered = combine_daughter_pathways(gas_filtered, nGroups)
 
     dsv_path = dir / 'cumulative_gendf_data.dsv'
-    write_dsv(dsv_path, gas_filtered)
+    write_dsv(dsv_path, gas_filtered, nGroups)
 
     print('-' * 20)
     print(f'Compiled decay data: {decay_path}')
