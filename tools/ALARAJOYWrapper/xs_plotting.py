@@ -87,32 +87,23 @@ def extract_continuous_data(endf_obj, MT):
 
     continuous_dict = {'energies' : [], 'xs' : []}
     MT, isomeric_state = flagged_num_to_int(MT)
-    rxn = Reaction.from_endf(endf_obj, MT)
+    rxn_obj = Reaction.from_endf(endf_obj, MT)
 
     # For excitation reactions, calculate specific pathway reactions by
     # multiplying reaction multiplicities by MF3 cumulative cross-sections
     # interpolated by the multiplicities' energy array
     if isomeric_state > 0:
-
-        pathways = []
-        for product in rxn.products:
-            if product.particle not in {'neutron', 'photon', 'electron'}:
-                iso_flag = re.compile(r'_e(\d+)$').search(product.particle)
-                excited_state = int(iso_flag.group(1)) if iso_flag else 0
-                pathways.append((excited_state, product))
-
-        pathways.sort(key=lambda pathway: pathway[0])
-
+        pathways = tp.collect_excitation_pathways(rxn_obj)
         if pathways and isomeric_state < len(pathways):
             product = pathways[isomeric_state][1]
             energies = product.yield_.x
             continuous_dict['energies'].extend(energies)
             continuous_dict['xs'].extend(
-                product.yield_.y * rxn.xs['0K'](energies)
+                product.yield_.y * rxn_obj.xs['0K'](energies)
             )
 
     else:
-        mf3_xs_table = rxn.xs.get('0K')
+        mf3_xs_table = rxn_obj.xs.get('0K')
         if mf3_xs_table:
             continuous_dict['energies'].extend(mf3_xs_table.x)
             continuous_dict['xs'].extend(mf3_xs_table.y)
