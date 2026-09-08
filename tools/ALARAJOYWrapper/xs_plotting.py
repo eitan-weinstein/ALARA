@@ -7,6 +7,7 @@ import reaction_data as rxd
 import matplotlib.pyplot as plt
 from matplotlib.patches import StepPatch
 from pathlib import Path
+import pandas as pd
 
 def flagged_num_to_int(num):
     """
@@ -421,7 +422,8 @@ def compute_groupwise_xs_ratios(groupwise_dict):
     return ratio_dict, reference_group
 
 def plot_relative_group_xs(
-    ax, element, A, emitted, groupwise_dict, color_dict, x_limits=(None, None)
+    ax, element, A, MT, emitted, groupwise_dict, color_dict, ratio_stats_df,
+    x_limits=(None, None)
 ):
     """
     Create a plot of the ratio series of groupwise cross-sections relative to
@@ -436,6 +438,7 @@ def plot_relative_group_xs(
             If the target is a metastable isomer, "m" or "n" is written after 
             the mass number, corresponding to the first or second metastable
             states.
+        MT (int or str): Unique reaction identifier.
         emitted (str): Particle(s) emitted from a nuclear reaction.
         continuous_dict (dict, optional): Dictionary containing an individual
             nuclide's continous TENDL cross-sections and energies for a given
@@ -461,6 +464,8 @@ def plot_relative_group_xs(
         color_dict (dict): Dictionary keyed by each group structure, with
             values of the tuple of 0-1 RGBA values defining the color/
             transparency of each series.
+        ratio_stats_df (pandas.DataFrame): DataFrame containing mean and
+            standard deviation statistics for each ratio plot produced.
         xlimits (tuple, optional): Option to specify the x-axis limits for
             the plot.
             (Defaults to (None, None))
@@ -468,6 +473,8 @@ def plot_relative_group_xs(
     Returns:
         ax (matplotlib.axes._axes.Axes): Updated Matplotlib Axes object of the
             plot being constructed.
+        ratio_stats_df (pandas.DataFrame): Updated DataFrame containing mean
+            and standard deviation statistics for each ratio plot produced.
     """
     
     if len(groupwise_dict) < 2:
@@ -479,10 +486,21 @@ def plot_relative_group_xs(
     ratio_dict, reference_group = compute_groupwise_xs_ratios(groupwise_dict)
 
     for group_name, group_data in ratio_dict.items():
+        comparison = f'{group_name} / {reference_group}'
+        ratio_mean = np.nanmean(group_data['ratio_xs'])
+        ratio_std = np.nanstd(group_data['ratio_xs'])
+        ratio_stats_df.loc[len(ratio_stats_df)] = [
+            element, A, MT, comparison, ratio_mean, ratio_std
+        ]
+        label = (
+            comparison
+            + f'\n$\\mu = {ratio_mean:.3f},'
+            + f'\\ \\sigma = {ratio_std:.3e}$\n'
+        )
         ax.stairs(
             group_data['ratio_xs'], group_data['energies'],
             baseline=None,
-            label=f'{group_name} / {reference_group}',
+            label=label,
             color=np.mean(
                 [color_dict[group_name], color_dict[reference_group]], axis=0
             )
@@ -494,7 +512,10 @@ def plot_relative_group_xs(
         f'Reference Group = {reference_group}'
     )
 
-    return set_plot_parameters(ax, title=title, ratio_plotting=True)
+    return (
+        set_plot_parameters(ax, title=title, ratio_plotting=True),
+        ratio_stats_df
+    )
 
 def check_all_tag(param):
     """
@@ -600,6 +621,9 @@ def main():
         else set(nuc_hierarchy) & tendl_elements
     )
 
+    ratio_stats_df = pd.DataFrame(
+        columns=['Element', 'A', 'MT', 'Data Comparison', 'Mean', 'STD']
+    )
     for element in elements:
         element_dict = adjust_dict_for_all_tag(nuc_hierarchy, element)
         mass_nums = list(element_dict)
@@ -646,9 +670,9 @@ def main():
                     if args.ratio_plotting:
                         ratio_fig, ratio_ax = plt.subplots(figsize=(10,6))
                         color_dict = collect_all_stair_colors(ax)
-                        plot_relative_group_xs(
-                            ratio_ax, element, A, emitted, groupwise_dict,
-                            color_dict, ax.get_xlim()
+                        _, ratio_stats_df = plot_relative_group_xs(
+                            ratio_ax, element, A, MT, emitted, groupwise_dict,
+                            color_dict, ratio_stats_df, ax.get_xlim()
                         )
                         ratio_plot_path = set_plot_save_path(
                             element, A, emitted, tendl_dir,
@@ -657,10 +681,18 @@ def main():
                         )
                         plt.savefig(ratio_plot_path)
 
+    top_save_dir = plot_path.parents[2]
     print(
-        f'Cross-section plots saved to {plot_path.parents[2]}/, ' \
+        f'Cross-section plots saved to {top_save_dir}/, ' \
         'organized by element, nuclide, reaction.'
     )
+
+    if not ratio_stats_df.empty:
+        csv_save_path = top_save_dir / 'ratio_statistics.csv'
+        ratio_stats_df.to_csv(csv_save_path)
+        print(
+            f'Cross-section ratio statistics saved to {csv_save_path}.'
+        )
 
 
 if __name__ == '__main__':
